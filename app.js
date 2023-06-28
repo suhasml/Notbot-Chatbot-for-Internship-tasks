@@ -15,6 +15,24 @@ const request = require("request"),
 // In-memory storage for session data
 const sessions = {};
 
+// MongoDB setup
+const { MongoClient } = require("mongodb");
+const mongoURI = process.env.MONGODB_URI;
+const dbName = process.env.MONGODB_DB_NAME;
+const client = new MongoClient(mongoURI, { useUnifiedTopology: true });
+let db;
+
+client.connect((err) => {
+  if (err) {
+    console.error("Error connecting to MongoDB:", err);
+    process.exit(1);
+  }
+
+  console.log("Connected to MongoDB");
+
+  db = client.db(dbName);
+});
+
 // Sets server port and logs message on success
 app.listen(process.env.PORT || 1337, () => console.log("webhook is listening"));
 
@@ -49,7 +67,10 @@ app.post("/webhook", (req, res) => {
           context: {}
         };
         sessions[from] = session;
-      }
+
+       
+      } 
+      
 
       if (req.body.entry[0].changes[0].value.messages[0].type === "text") {
         // Extract the message text from the webhook payload for text messages
@@ -60,18 +81,31 @@ app.post("/webhook", (req, res) => {
         req.body.entry[0].changes[0].value.messages[0].type === "interactive"
       ) {
         // Handle button responses separately
-        if (req.body.entry[0].changes[0].value.messages[0].interactive.type == "button_reply"){
-        let button_response =
-          req.body.entry[0].changes[0].value.messages[0].interactive
-            .button_reply.id;
-        handleMessage(session, phone_number_id, from, null, button_response);
+        if (
+          req.body.entry[0].changes[0].value.messages[0].interactive.type ==
+          "button_reply"
+        ) {
+          let button_response =
+            req.body.entry[0].changes[0].value.messages[0].interactive
+              .button_reply.id;
+          handleMessage(session, phone_number_id, from, null, button_response,null);
+        } else if (
+          req.body.entry[0].changes[0].value.messages[0].interactive.type ===
+          "list_reply"
+        ) {
+          // List response
+          const list_response =
+            req.body.entry[0].changes[0].value.messages[0].interactive.list_reply
+              .id;
+          handleMessage(
+            session,
+            phone_number_id,
+            from,
+            null,
+            null,
+            list_response
+          );
         }
-        else if (req.body.entry[0].changes[0].value.messages[0].interactive.type === "list_reply") {
-    // List response
-        const list_response = req.body.entry[0].changes[0].value.messages[0].interactive.list_reply.id;
-        handleMessage(session, phone_number_id, from, null, null, list_response);
-        }
-        
       }
     }
     res.sendStatus(200);
@@ -82,7 +116,14 @@ app.post("/webhook", (req, res) => {
 });
 
 // Handles user messages based on session state
-function handleMessage(session, phone_number_id, from, message, button_response, list_response) {
+function handleMessage(
+  session,
+  phone_number_id,
+  from,
+  message,
+  button_response,
+  list_response
+) {
   if (!session.context.state) {
     // No state, set the initial state
     session.context.state = "INITIAL";
@@ -92,20 +133,36 @@ function handleMessage(session, phone_number_id, from, message, button_response,
     case "INITIAL":
       // User sent "hi", respond with a message and buttons
       if (message && message.toLowerCase() === "hi") {
-        const response = "Hi! Are you here to apply for the Internship?";
-        const buttons = [
-          {
-            payload: "APPLY_YES",
-            title: "Yes"
-          },
-          {
-            payload: "APPLY_NO",
-            title: "No"
+        db.collection("users").findOne({ id: from }, (err, result) => {
+          if (err) {
+            console.error("Error retrieving user data from the database:", err);
+            return;
           }
-        ];
+          if (result) {
+            session.context = result;
+            // Existing user, greet by name
+            sendWhatsAppMessage(
+              phone_number_id,
+              from,
+              `Hi ${result.name}! We have your information, we will get back to you shortly!`
+            );
+          } else {
+            const response = "Hi! Are you here to apply for the Internship?";
+            const buttons = [
+              {
+                payload: "APPLY_YES",
+                title: "Yes"
+              },
+              {
+                payload: "APPLY_NO",
+                title: "No"
+              }
+            ];
 
-        sendWhatsAppMessage(phone_number_id, from, response, buttons);
-        session.context.state = "AWAITING_RESPONSE";
+            sendWhatsAppMessage(phone_number_id, from, response, buttons);
+            session.context.state = "AWAITING_RESPONSE";
+          }
+        });
       }
       break;
     case "AWAITING_RESPONSE":
@@ -148,44 +205,44 @@ function handleMessage(session, phone_number_id, from, message, button_response,
         const response =
           "Please select how many years of experience you have with Python/JS/Automation Development:";
         const list = {
-  header: {
-    type: "text",
-    text: "Experience"
-  },
-  footer: {
-    text: "Choose"
-  },
-  action: {
-    button: "View More",
-    sections: [
-      {
-        title: "Years of Experience",
-        rows: [
-          {
-            id: "1",
-            title: "1 year"
+          header: {
+            type: "text",
+            text: "Experience"
           },
-          {
-            id: "2",
-            title: "2 years"
+          footer: {
+            text: "Choose"
           },
-          {
-            id: "3",
-            title: "3 years"
-          },
-          {
-            id: "4",
-            title: "4 years"
-          },
-          {
-            id: "5",
-            title: "5 years"
+          action: {
+            button: "View More",
+            sections: [
+              {
+                title: "Years of Experience",
+                rows: [
+                  {
+                    id: "1",
+                    title: "1 year"
+                  },
+                  {
+                    id: "2",
+                    title: "2 years"
+                  },
+                  {
+                    id: "3",
+                    title: "3 years"
+                  },
+                  {
+                    id: "4",
+                    title: "4 years"
+                  },
+                  {
+                    id: "5",
+                    title: "5 years"
+                  }
+                ]
+              }
+            ]
           }
-        ]
-      }
-    ]
-  }
-};
+        };
 
         sendWhatsAppMessage(phone_number_id, from, response, null, list);
         session.context.email = message;
@@ -204,6 +261,9 @@ function handleMessage(session, phone_number_id, from, message, button_response,
         const response = "Thanks for connecting. We will get back to you shortly!";
         sendWhatsAppMessage(phone_number_id, from, response);
         session.context.state = "INITIAL";
+
+        // Save user data to the database
+        saveUserData(session);
       }
       break;
     default:
@@ -214,7 +274,6 @@ function handleMessage(session, phone_number_id, from, message, button_response,
       break;
   }
 }
-
 
 
 function sendWhatsAppMessage(
@@ -333,4 +392,20 @@ function isValidEmail(email) {
   // A basic email validation regex
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
+}
+
+// Saves user data to the database
+function saveUserData(session) {
+  db.collection("users").updateOne(
+    { id: session.id },
+    { $set: session.context },
+    { upsert: true },
+    (err, result) => {
+      if (err) {
+        console.error("Error saving user data to the database:", err);
+      } else {
+        console.log("User data saved successfully:", result);
+      }
+    }
+  );
 }
